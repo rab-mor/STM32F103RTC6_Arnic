@@ -1,0 +1,50 @@
+# ==========================================
+# STM32CubeIDE & Eclipse Build Artifacts
+# ==========================================
+Debug/
+Release/
+[Dd]ebug/
+[Rr]elease/
+
+# Object, map, and dependency files
+*.o
+*.su
+*.d
+*.map
+*.lst
+
+# Binary output formats
+*.elf
+*.bin
+*.hex
+*.srec
+
+# ==========================================
+# IDE Configurations & Caches
+# ==========================================
+.metadata/
+.settings/
+*.launch
+
+# If using Visual Studio Code with ST Extensions
+.vscode/*
+!.vscode/*.json
+
+# ==========================================
+# Hardware Debugger Outputs
+# ==========================================
+*.jlink
+*.log
+
+# ==========================================
+# CRITICAL FILES: DO NOT IGNORE
+# ==========================================
+# The following lines explicitly protect files needed by STM32CubeIDE/MX
+# (Uncomment if global rules or other patterns accidentally hide them)
+# !.project
+# !.cproject
+# !.mxproject
+# !*.ioc
+
+# Block Cm4 or CM7 .settings 
+CM*/.settings*
