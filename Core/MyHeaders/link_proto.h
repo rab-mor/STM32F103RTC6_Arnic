@@ -60,6 +60,7 @@ typedef struct {
 } link_wire_event_t;
 
 
+
 typedef struct {
     uint32_t          window_id;
     int16_t           relay_ma[LINK_RELAY_COUNT];
@@ -73,6 +74,7 @@ typedef struct {
 } link_status_t;
 
 
+/* 4 byte packet */
 typedef struct {
 	uint8_t  relay_idx;
 	uint8_t  target;
@@ -80,6 +82,7 @@ typedef struct {
 } link_cmd_t;
 
 
+/* 64 byte packet. payload is 54 bytes */
 typedef struct {
 	uint16_t magic;
 	uint8_t  version;

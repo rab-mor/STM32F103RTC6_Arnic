@@ -19,7 +19,7 @@
 * bit 1 --> set when a TX frame is ready to be sent */
 #define LINK_FLAG_FRAME_RX 		(1u << 0) /* EXTI rising edge: frame in rx Buf */
 #define LINK_FLAG_TX_READY 		(1u << 1) /* MeasureTask new snapshot ready to be transferred to STMH7  */
-#define LINK_FLAG_SPI_ERROR 	(1u << 2)
+#define LINK_FLAG_SPI_ERROR 	(1u << 2) /* SPI error.  */
 
 #define FAULT_UNCALIBRATED (1u << 0)
 #define FAULT_ADC_START    (1u << 1)   /* sense_start() failed: no measurements   */
