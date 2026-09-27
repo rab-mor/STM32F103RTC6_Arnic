@@ -64,7 +64,7 @@ void MX_FREERTOS_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+extern uint32_t g_pfnVectors[];   /* startup file: the application's vector table */
 /* USER CODE END 0 */
 
 /**
@@ -75,7 +75,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+  SCB->VTOR = (uint32_t)g_pfnVectors;   /* 0x08004000: the bootloader sits below */
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/

@@ -45,7 +45,10 @@ _Min_Stack_Size = 0x400; /* required amount of stack */
 MEMORY
 {
   RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 48K
-  FLASH    (rx)    : ORIGIN = 0x8000000,   LENGTH = 256K
+  BOOT     (rx)    : ORIGIN = 0x8000000,   LENGTH = 16K
+  FLASH    (rx)    : ORIGIN = 0x8004000,   LENGTH = 118K
+  /* 0x08021800 118K: update staging, 0x0803F000 4K: update record.
+     Not linked into; see Core/MyHeaders/f1_image.h. */
 }
 
 /* Sections */
@@ -53,6 +56,15 @@ SECTIONS
 {
 
   /* The startup code into "FLASH" Rom type memory */
+  /* The bootloader (Core/MySrc/f1_boot.c): its own vector table at
+     0x08000000, then its code and constants. Nothing else goes here. */
+  .boot :
+  {
+    KEEP(*(.boot.vectors))
+    KEEP(*(.boot.text*))
+    KEEP(*(.boot.rodata*))
+  } >BOOT
+
   .isr_vector :
   {
     . = ALIGN(4);

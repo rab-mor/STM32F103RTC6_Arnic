@@ -115,6 +115,104 @@ int link_decode_cmd(const uint8_t *payload, link_cmd_t *cmd) {
 }
 
 
+void link_put_f0(uint8_t *payload, uint8_t off, uint16_t f0_centi_hz)
+{
+	put_u16(&payload[off], f0_centi_hz);
+}
+
+uint16_t link_get_f0(const uint8_t *payload, uint8_t off)
+{
+	return get_u16(&payload[off]);
+}
+
+
+void link_encode_ota_req(uint8_t *payload, const link_ota_req_t *r)
+{
+	memset(payload, 0, F10COMM_PAYLOAD_SIZE);
+	uint8_t n = r->len;
+	if (n > LINK_OTA_DATA_MAX) n = LINK_OTA_DATA_MAX;
+	payload[0] = r->op;
+	payload[1] = r->op_seq;
+	payload[2] = n;
+	put_u32(&payload[4], r->offset);
+	memcpy(&payload[8], r->data, n);
+}
+
+int link_decode_ota_req(const uint8_t *payload, link_ota_req_t *r)
+{
+	r->op     = payload[0];
+	r->op_seq = payload[1];
+	r->len    = payload[2];
+	r->offset = get_u32(&payload[4]);
+	if (r->len > LINK_OTA_DATA_MAX) return -1;
+	memcpy(r->data, &payload[8], LINK_OTA_DATA_MAX);
+	return 0;
+}
+
+void link_encode_ota_status(uint8_t *payload, const link_ota_status_t *s)
+{
+	memset(payload, 0, F10COMM_PAYLOAD_SIZE);
+	payload[0] = s->op_seq;
+	payload[1] = s->result;
+	payload[2] = s->state;
+	payload[3] = s->board_type;
+	put_u32(&payload[4], s->next_offset);
+	put_u16(&payload[8], s->fw_version);
+}
+
+void link_decode_ota_status(const uint8_t *payload, link_ota_status_t *s)
+{
+	s->op_seq      = payload[0];
+	s->result      = payload[1];
+	s->state       = payload[2];
+	s->board_type  = payload[3];
+	s->next_offset = get_u32(&payload[4]);
+	s->fw_version  = get_u16(&payload[8]);
+}
+
+
+void link_encode_harm(uint8_t *p, const link_harm_t *h)
+{
+	put_u16(&p[0], h->h1_ma);
+	for (uint8_t k = 0u; k < LINK_HARM_RATIOS; k++) {
+		put_u16(&p[2u + 2u * k], h->ratio[k]);
+		p[18u + k] = (uint8_t)h->phase[k];
+	}
+}
+
+void link_decode_harm(const uint8_t *p, link_harm_t *h)
+{
+	h->h1_ma = get_u16(&p[0]);
+	for (uint8_t k = 0u; k < LINK_HARM_RATIOS; k++) {
+		h->ratio[k] = get_u16(&p[2u + 2u * k]);
+		h->phase[k] = (int8_t)p[18u + k];
+	}
+}
+
+void link_encode_harm_part(uint8_t *payload, const link_harm_part_t *hp)
+{
+	memset(payload, 0, F10COMM_PAYLOAD_SIZE);
+	payload[0] = hp->set_id;
+	payload[1] = hp->part;
+	put_u16(&payload[2], hp->f0_centi_hz);
+	for (uint8_t i = 0u; i < LINK_HARM_RELAYS_PER_PART; i++) {
+		link_encode_harm(&payload[4u + LINK_HARM_REC_BYTES * i], &hp->rec[i]);
+	}
+}
+
+int link_decode_harm_part(const uint8_t *payload, link_harm_part_t *hp)
+{
+	hp->set_id      = payload[0];
+	hp->part        = payload[1];
+	hp->f0_centi_hz = get_u16(&payload[2]);
+	if (hp->part >= LINK_HARM_PARTS) return -1;
+	for (uint8_t i = 0u; i < LINK_HARM_RELAYS_PER_PART; i++) {
+		link_decode_harm(&payload[4u + LINK_HARM_REC_BYTES * i], &hp->rec[i]);
+	}
+	return 0;
+}
+
+
 uint16_t F10Comm_Crc16(const uint8_t *data, size_t len)
 {
     uint16_t crc = 0xFFFFu;

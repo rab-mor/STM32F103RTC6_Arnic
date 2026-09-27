@@ -29,6 +29,10 @@
 #define BOARD_LINK_SPI          1   /* this target talks to the H7 over SPI2 */
 #define BOARD_LINK_UART         0
 
+#define F1_THIS_BOARD           2U  /* F1_BOARD_MAIN (f1_image.h): updates check it */
+#define FW_VERSION_MAJOR        1U  /* reported to the H7; bump with each release   */
+#define FW_VERSION_MINOR        0U
+
 /* ======================================================================
  * Clock tree
  *
