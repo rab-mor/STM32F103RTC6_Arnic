@@ -15,6 +15,7 @@
  *   FAULT_ADC_START     sense_start() failed: currents and rails read 0
  *   FAULT_ADC_STALL     no window for MEASURE_STALL_MS: DMA or TIM3 stopped
  *   FAULT_ADC_OVERRUN   a DMA half-buffer was lost since the last window
+ *   FAULT_EEPROM        no AT24C64, or the last relay record save failed
  *
  * The snapshot is double-buffered: this task fills g_snap[!active] and then
  * flips g_snap_active, so LinkTask never reads a half-written one.
@@ -45,7 +46,15 @@ static void publish(app_snapshot_t *next)
 {
     next->window_id      = ++s_window_id;
     next->relay_state    = (uint8_t)relays_get_state_mask();
+    next->relay_known    = (uint8_t)relays_known_mask();
+    next->relay_evidence = (uint8_t)g_relay_truth.evidence_mask;
+    next->store_flags    = g_relay_truth.store_flags;
     next->dropped_events = g_snap[g_snap_active].dropped_events;   /* kept by link_post_event */
+
+    const uint8_t st = next->store_flags;
+    if (((st & STORE_F_PRESENT) == 0u) || ((st & STORE_F_SAVE_FAILED) != 0u)) {
+        next->fault_flags |= FAULT_EEPROM;
+    }
 
     __DMB();                                        /* contents before the flip */
     g_snap_active = (uint8_t)(1u - g_snap_active);

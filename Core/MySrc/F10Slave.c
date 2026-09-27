@@ -123,6 +123,9 @@ static void build_tx_frame(uint8_t idx)
     st.relay_state    = s->relay_state;
     st.fault_flags    = s->fault_flags;
     st.dropped_events = s->dropped_events;
+    st.relay_known    = s->relay_known;
+    st.relay_evidence = s->relay_evidence;
+    st.store_flags    = s->store_flags;
 
     /* Events are per-frame, not running state, so they are drained here and
      * not from g_snap. Timeout 0: if the queue is empty, event_count stays 0. */

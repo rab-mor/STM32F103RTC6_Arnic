@@ -20,9 +20,19 @@
  *  - Shadow state is tracked, so redundant commands do not re-pulse and
  *    the link can report real positions.
  *
- *  - relays_init() does not block.  The old RELAYS_GPIO_Init() spent
- *    8 x 80 ms in HAL_Delay(), which would trip the external watchdog
- *    on this board.
+ *  - Nothing is ever pulsed at boot.  A latching relay keeps its position
+ *    through a reset or a power cut, so relays_init() assumes OFF without
+ *    touching a coil, and RelayTask then restores the saved positions with
+ *    relays_restore() (relay_store.c).  The only thing that moves a relay is
+ *    a command.
+ *
+ *  - A command always pulses, even when the relay is believed to be there
+ *    already.  That is the only way to be certain of a latching relay's
+ *    position, and it costs one 80 ms coil pulse.
+ *
+ *  - "established" means the position is backed by something: a pulse that
+ *    completed, the saved record, or current flowing through the contacts
+ *    (relays_adopt()).  A position assumed at first boot is not established.
  *
  *  - Only one coil per relay can ever be energised, structurally: each
  *    relay owns a single coil selector, not two independent pins.
@@ -121,8 +131,9 @@ static volatile uint32_t s_activity = 0U;
 
 typedef struct {
     uint8_t  target;        /* requested state, 1 = ON                   */
-    uint8_t  known;         /* last established position                 */
-    uint8_t  known_valid;   /* 0 until a pulse has completed             */
+    uint8_t  known;         /* position we believe the relay is in       */
+    uint8_t  established;   /* known is backed by a pulse, record or current */
+    uint8_t  force;         /* a command asked for a pulse               */
     uint8_t  pulsing;       /* a coil is energised right now             */
     uint8_t  coil;          /* which coil, COIL_A or COIL_B              */
     uint32_t t_start;       /* tick at which the coil went high          */
@@ -187,17 +198,50 @@ void relays_init(void)
         coil_write(i, COIL_A, GPIO_PIN_RESET);
         coil_write(i, COIL_B, GPIO_PIN_RESET);
 
-        s_ctx[i].target      = 0U;   /* queue everything to OFF */
+        /* Assume OFF, but do not pulse: target == known means the scheduler
+         * leaves it alone.  relays_restore() replaces this with the saved
+         * positions. */
+        s_ctx[i].target      = 0U;
         s_ctx[i].known       = 0U;
-        s_ctx[i].known_valid = 0U;   /* position genuinely unknown at boot */
+        s_ctx[i].established = 0U;
+        s_ctx[i].force       = 0U;
         s_ctx[i].pulsing     = 0U;
         s_ctx[i].coil        = COIL_A;
         s_ctx[i].t_start     = now;
         s_ctx[i].t_ready     = now;
     }
+}
 
-    /* No pulsing here.  known_valid == 0 with target == 0 makes the
-     * scheduler drive all eight to OFF, staggered, from relays_tick(). */
+void relays_restore(uint32_t state_mask, uint32_t established_mask)
+{
+    for (uint8_t i = 0U; i < RELAY_COUNT; i++) {
+        if (s_ctx[i].pulsing != 0U || s_ctx[i].force != 0U) {
+            continue;       /* a command got in first: it wins */
+        }
+        const uint8_t on = ((state_mask >> i) & 1UL) ? 1U : 0U;
+        s_ctx[i].known       = on;
+        s_ctx[i].target      = on;
+        s_ctx[i].established = ((established_mask >> i) & 1UL) ? 1U : 0U;
+    }
+}
+
+uint8_t relays_adopt(uint8_t idx, uint8_t state)
+{
+    if (idx >= RELAY_COUNT || state > 1U) {
+        return 0U;
+    }
+    relay_ctx_t *c = &s_ctx[idx];
+    if (c->pulsing != 0U || c->force != 0U || c->known != c->target) {
+        return 0U;          /* moving: the pulse will settle it */
+    }
+    if (c->known == state && c->established != 0U) {
+        return 0U;          /* nothing new */
+    }
+    c->known       = state;
+    c->target      = state;
+    c->established = 1U;
+    s_activity++;
+    return 1U;
 }
 
 void relays_tick(void)
@@ -219,7 +263,7 @@ void relays_tick(void)
              * a request that arrived mid-pulse may have changed that, and
              * it still needs a pulse of its own. */
             s_ctx[i].known       = state_for_coil(i, s_ctx[i].coil);
-            s_ctx[i].known_valid = 1U;
+            s_ctx[i].established = 1U;
             s_ctx[i].t_ready     = now + RELAY_INTERPULSE_MS;
         }
     }
@@ -239,8 +283,8 @@ void relays_tick(void)
         if (s_ctx[i].pulsing != 0U) {
             continue;
         }
-        /* Already where it should be, and we know that for a fact. */
-        if (s_ctx[i].known_valid != 0U && s_ctx[i].known == s_ctx[i].target) {
+        /* Where it should be, and no command asked for a pulse. */
+        if (s_ctx[i].force == 0U && s_ctx[i].known == s_ctx[i].target) {
             continue;
         }
         /* Signed compare so the tick wrap at 49.7 days is handled. */
@@ -251,6 +295,7 @@ void relays_tick(void)
         s_ctx[i].coil    = coil_for_state(i, s_ctx[i].target);
         s_ctx[i].t_start = now;
         s_ctx[i].pulsing = 1U;
+        s_ctx[i].force   = 0U;
         coil_write(i, s_ctx[i].coil, GPIO_PIN_SET);
         s_activity++;
         active++;
@@ -276,8 +321,12 @@ int relays_request(uint8_t idx, uint8_t state)
     }
 
     /* Record only.  If a pulse is in flight it finishes first; the
-     * scheduler picks this up on the pass after that. */
-    s_ctx[idx].target = state;
+     * scheduler picks this up on the pass after that.  A pulse already
+     * heading for this state satisfies the command; anything else gets a
+     * pulse of its own, even if we believe the relay is there already. */
+    relay_ctx_t *c = &s_ctx[idx];
+    c->target = state;
+    c->force  = (c->pulsing != 0U && state_for_coil(idx, c->coil) == state) ? 0U : 1U;
     return RELAYS_OK;
 }
 
@@ -306,7 +355,7 @@ uint8_t relays_get_state(uint8_t idx)
 
 uint8_t relays_state_known(uint8_t idx)
 {
-    return (idx < RELAY_COUNT) ? s_ctx[idx].known_valid : 0U;
+    return (idx < RELAY_COUNT) ? s_ctx[idx].established : 0U;
 }
 
 
@@ -316,7 +365,7 @@ uint8_t relays_settled(uint8_t idx)
         return 0U;
     }
     const relay_ctx_t *c = &s_ctx[idx];
-    return (c->pulsing == 0U && c->known_valid != 0U && c->known == c->target) ? 1U : 0U;
+    return (c->pulsing == 0U && c->force == 0U && c->known == c->target) ? 1U : 0U;
 }
 
 
@@ -336,7 +385,7 @@ uint32_t relays_known_mask(void)
 {
     uint32_t m = 0U;
     for (uint8_t i = 0U; i < RELAY_COUNT; i++) {
-        if (s_ctx[i].known_valid != 0U) {
+        if (s_ctx[i].established != 0U) {
             m |= (1UL << i);
         }
     }
@@ -349,7 +398,7 @@ uint8_t relays_busy(void)
         if (s_ctx[i].pulsing != 0U) {
             return 1U;
         }
-        if (s_ctx[i].known_valid == 0U || s_ctx[i].known != s_ctx[i].target) {
+        if (s_ctx[i].force != 0U || s_ctx[i].known != s_ctx[i].target) {
             return 1U;
         }
     }

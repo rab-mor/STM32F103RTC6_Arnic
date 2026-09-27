@@ -71,6 +71,9 @@ typedef struct {
     uint16_t          dropped_events;
     uint8_t           event_count;
     link_wire_event_t events[LINK_MAX_EVENTS_PER_FRAME];
+    uint8_t           relay_known;      /* bit n: position established      */
+    uint8_t           relay_evidence;   /* bit n: corrected by current      */
+    uint8_t           store_flags;      /* STORE_F_* (F103 app_shared.h)    */
 } link_status_t;
 
 
@@ -107,7 +110,15 @@ _Static_assert(sizeof(F10Comm_Frame_t) == 64, "frame layout changed");
  *  26    2   dropped_events   u16 (cumulative)
  *  28    1   event_count      u8  (0..3)
  *  29   24   events[3]        8 bytes each
- *  53    3   reserved
+ *  53    1   relay_known      u8  (bit n = relay n's position is established:
+ *                                  a pulse, the saved record or current evidence)
+ *  54    1   relay_evidence   u8  (bit n = position corrected by current evidence
+ *                                  since that relay's last command)
+ *  55    1   store_flags      u8  (bit 0 EEPROM present, 1 restored from a record,
+ *                                  2 last save failed, 3 save pending)
+ *
+ * Bytes 53..55 were reserved (zero) in older F103 builds, so an H7 reading an
+ * old F103 sees relay_known == 0 and adopts nothing.
  */
 
 /*-------Function Prototypes ---------*/

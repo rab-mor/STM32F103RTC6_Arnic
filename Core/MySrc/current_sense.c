@@ -33,11 +33,13 @@
  * 50 Hz and 60 Hz mains alike.  This is the reason for 400 and it is
  * not an arbitrary choice.
  *
- * The zero-current noise-gate calibration, with one correction: it now
- * waits for relays_busy() to clear.  Latching relays hold position
- * across a reset, so current may be flowing at boot until relays_init()
- * has pulsed them all off.  Calibrating during that window would learn
- * a gate that swallows real current.
+ * The zero-current noise-gate calibration, with two corrections.  It
+ * waits for relays_busy() to clear, and it no longer assumes the relays
+ * are off: latching relays keep their positions through a reset and
+ * nothing is pulsed at boot, so a load may be drawing current while the
+ * gate is learned.  A channel whose relay is ON, or whose learned gate
+ * exceeds SENSE_GATE_MAX_A, keeps the fixed SENSE_NOISE_FLOOR_A instead,
+ * so real current is never learned as noise.
  *
  * WHAT WAS DROPPED
  *
@@ -191,7 +193,14 @@ static void cal_update(void)
                     ? (s_cal_m2[i] / (float)(s_cal_n - 1U))
                     : 0.0f;
         float gate  = s_cal_mean[i] + SENSE_CAL_SIGMA * sqrtf(var);
-        s_gate_a[i] = (gate > SENSE_NOISE_FLOOR_A) ? gate : SENSE_NOISE_FLOOR_A;
+
+        if (relays_get_state(i) != 0U || gate > SENSE_GATE_MAX_A) {
+            /* A load was (or may have been) drawing current: that is not
+             * noise.  Keep the fixed floor for this channel. */
+            s_gate_a[i] = SENSE_NOISE_FLOOR_A;
+        } else {
+            s_gate_a[i] = (gate > SENSE_NOISE_FLOOR_A) ? gate : SENSE_NOISE_FLOOR_A;
+        }
     }
     s_cal_done = 1U;
 }
@@ -237,10 +246,10 @@ static void finalize(void)
                       * ADC_MV_PER_LSB * 0.001f * RAIL_5V_DIVIDER;
 
     /*
-     * Calibration must see genuinely zero current.  relays_busy() stays
-     * high until every relay has reached its commanded position, which
-     * at boot means all eight pulsed to OFF.  If a relay command arrives
-     * mid-calibration, discard what has been gathered and start over.
+     * Calibration wants quiet channels.  If a relay moves mid-calibration
+     * (relays_busy() or a change in relays_activity()), discard what has
+     * been gathered and start over.  Channels that were carrying current
+     * are caught in cal_update() and keep the fixed floor.
      */
     if (s_cal_done == 0U) {
     	uint32_t act = relays_activity();

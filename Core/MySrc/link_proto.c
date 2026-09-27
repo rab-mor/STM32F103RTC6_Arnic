@@ -53,6 +53,10 @@ void link_encode_status(uint8_t *payload, const link_status_t *st) {
 	        put_u16(&e[2], st->events[i].cmd_seq);
 	        put_u32(&e[4], (uint32_t)st->events[i].measured_ma);
 	    }
+
+	payload[53] = st->relay_known;
+	payload[54] = st->relay_evidence;
+	payload[55] = st->store_flags;
 }
 
 
@@ -78,6 +82,9 @@ int link_decode_status(const uint8_t *payload, link_status_t *st) {
 	st->relay_state    = payload[24];
 	st->fault_flags    = payload[25];
 	st->dropped_events = get_u16(&payload[26]);
+	st->relay_known    = payload[53];
+	st->relay_evidence = payload[54];
+	st->store_flags    = payload[55];
 
     const uint8_t n = payload[28];
 	if(n > LINK_MAX_EVENTS_PER_FRAME) {

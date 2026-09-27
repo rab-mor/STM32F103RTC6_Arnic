@@ -1,8 +1,9 @@
 /**
- * relays.h - F103 header file
+ * relays.h - F103 header file (main board and expansion module)
  *
- * Non-blocking driver for eight dual-coil latching relays (ADJH23012)
- * driven through two ULN2803 Darlington arrays.
+ * Non-blocking driver for the dual-coil latching relays (ADJH23012)
+ * driven through ULN2803 Darlington arrays: 8 on the main board, 12 on the
+ * expansion module (RELAY_COUNT, board_config.h).
  *
  * Usage from the super-loop:
  *
@@ -26,15 +27,29 @@
 #define RELAYS_ERR_STATE       -2
 
 /**
- * Drive every coil low and queue all relays to the OFF state.
+ * Drive every coil low and assume every relay is OFF, without pulsing
+ * anything.  Nothing moves until a command arrives.
  *
- * Does NOT block.  The eight de-energising pulses are staggered by the
- * scheduler over roughly (8 / RELAY_MAX_CONCURRENT) * RELAY_PULSE_MS.
- * Poll relays_busy() if you need to know when the board has settled.
- *
- * Call after MX_GPIO_Init().
+ * Call after MX_GPIO_Init(), then relays_restore() with the saved record.
  */
 void relays_init(void);
+
+/**
+ * Take the positions from the saved record: bit N of state_mask is relay N's
+ * position, bit N of established_mask says it was known (not assumed) when
+ * saved.  No coil is pulsed.  A relay that already has a command in flight
+ * keeps it.
+ */
+void relays_restore(uint32_t state_mask, uint32_t established_mask);
+
+/**
+ * Current evidence: the relay is really in `state` (for example, current is
+ * flowing through a relay believed OFF).  Updates the position without a
+ * pulse.  Ignored while that relay is moving.
+ *
+ * @return 1 if the recorded position changed, 0 otherwise
+ */
+uint8_t relays_adopt(uint8_t idx, uint8_t state);
 
 /**
  * Advance the pulse scheduler.  Call from the main loop as often as
@@ -71,23 +86,22 @@ uint32_t relays_apply_mask(uint32_t update_mask, uint32_t state_mask);
 uint8_t relays_get_state(uint8_t idx);
 
 /**
- * Non-zero once a completed pulse has established a known position for
- * this relay.  Zero from reset until the first pulse finishes - a
- * latching relay holds its position across a power cycle, so firmware
- * cannot infer position at boot.
+ * Non-zero once this relay's position is established: a pulse completed,
+ * the saved record said so, or current evidence showed it.  Zero while the
+ * position is only assumed (first boot, no record).
  */
 uint8_t relays_state_known(uint8_t idx);
 
 /**
- * Non-zero when this relay has nothing left to do: no coil energised, its
- * position is known, and that position is the last one requested.
+ * Non-zero when this relay has nothing left to do: no coil energised, no
+ * command waiting for a pulse, and its position is the last one requested.
  */
 uint8_t relays_settled(uint8_t idx);
 
 /**
  * Packed shadow state, bit N = relay N.  Suitable for the status pay-load
- * pushed back over the link.  Pair it with relays_known_mask() so the
- * host can tell "off" from "not yet established".
+ * pushed back over the link.  relays_known_mask() is the established mask,
+ * so the host can tell "off" from "assumed off".
  */
 uint32_t relays_get_state_mask(void);
 uint32_t relays_known_mask(void);

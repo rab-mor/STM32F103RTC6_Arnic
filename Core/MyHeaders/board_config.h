@@ -219,6 +219,17 @@ _Static_assert(RMS_WINDOW_SAMPLES % ADC_TRIGGERS_PER_HALF == 0U, "RMS window mus
  */
 #define SENSE_NOISE_FLOOR_A     0.05f
 
+/* A learned gate above this is real current, not noise (relays are left as
+ * they were at boot, so a load may be running during calibration).  That
+ * channel keeps SENSE_NOISE_FLOOR_A instead. */
+#define SENSE_GATE_MAX_A        0.25f
+
+/* Current evidence (relay_task.c).  A relay believed OFF that carries at
+ * least EVIDENCE_ON_MA for EVIDENCE_WINDOWS windows in a row (0.5 s) is
+ * really ON; a relay commanded OFF that still carries it did not open. */
+#define EVIDENCE_ON_MA          300
+#define EVIDENCE_WINDOWS        10U
+
 /* Rail divider ratios (top + bottom) / bottom:
    24 V: 100k over 10k -> 11.0.   5 V: 270k over 56k -> 5.8214. */
 #define RAIL_24V_DIVIDER        11.0f
@@ -253,6 +264,12 @@ _Static_assert(RMS_WINDOW_SAMPLES % ADC_TRIGGERS_PER_HALF == 0U, "RMS window mus
  * bit here - do not add an inversion at the call site, which is how the
  */
 #define RELAY_REVERSED_MASK     0x00U
+/* Relay record in the AT24C64 (relay_store.c).  A save waits until no relay
+ * has moved for RSTORE_SETTLE_MS; a failed save is retried after
+ * RSTORE_RETRY_MS. */
+#define RSTORE_SETTLE_MS        250U
+#define RSTORE_RETRY_MS         5000U
+
 /* Bench switches. Real PCB: RELAY_DRIVE_COILS 1, MEASURE_SIMULATE 0. */
 #define RELAY_DRIVE_COILS       1   /* 0 = pulses timed and tracked, coil pins never driven */
 #define MEASURE_SIMULATE        0   /* 1 = synthetic currents/rails, 0 = real ADC (current_sense.c) */

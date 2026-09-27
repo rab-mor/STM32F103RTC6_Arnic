@@ -25,6 +25,13 @@
 #define FAULT_ADC_START    (1u << 1)   /* sense_start() failed: no measurements   */
 #define FAULT_ADC_STALL    (1u << 2)   /* no ADC window for 200 ms                 */
 #define FAULT_ADC_OVERRUN  (1u << 3)   /* DMA half-buffer lost: MeasureTask late   */
+#define FAULT_EEPROM       (1u << 4)   /* no AT24C64, or saving the relay record failed */
+
+/* Relay record state (relay_task.c), sent to the H7 in the status frame. */
+#define STORE_F_PRESENT     (1u << 0)  /* the AT24C64 answered at boot          */
+#define STORE_F_LOADED      (1u << 1)  /* positions were restored from a record */
+#define STORE_F_SAVE_FAILED (1u << 2)  /* the last save failed; retrying        */
+#define STORE_F_PENDING     (1u << 3)  /* positions changed, not saved yet      */
 
 // ADC
 #define MEAS_FLAG_WINDOW_DONE   (1u << 0)  /* ADC DMA TC: window closed         */
@@ -74,9 +81,24 @@ typedef struct {
 	uint8_t 	relay_state;
 	uint8_t 	fault_flags;
 	uint16_t 	dropped_events;
+	uint8_t 	relay_known;    /* bit n: relay n's position is established     */
+	uint8_t 	relay_evidence; /* bit n: position corrected by current evidence */
+	uint8_t 	store_flags;    /* STORE_F_*                                    */
+	uint8_t 	_pad;
 
 } app_snapshot_t;
-_Static_assert(sizeof(app_snapshot_t) == 44, "app_snapshot_t layout changed");
+_Static_assert(sizeof(app_snapshot_t) == 48, "app_snapshot_t layout changed");
+
+
+/*---------------Relay truth: RelayTask -> MeasureTask ------------*/
+
+typedef struct {
+	volatile uint16_t evidence_mask;  /* relays whose position came from current */
+	volatile uint8_t  store_flags;    /* STORE_F_*                               */
+	uint8_t           _pad;
+} relay_truth_t;
+
+extern relay_truth_t g_relay_truth;   /* relay_task.c */
 
 
 extern app_snapshot_t    g_snap[2];

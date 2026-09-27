@@ -40,6 +40,13 @@ typedef struct {
     uint32_t faults;        /* FAULT sent: not settled within the timeout   */
     uint32_t superseded;    /* FAULT sent: a newer command for that relay   */
     uint32_t rejected;      /* REJECTED sent: relays_request() refused it   */
+    uint32_t stuck_on;      /* FAULT sent: still conducting after OFF       */
+    uint32_t evidence_on;   /* positions corrected to ON by current         */
+    uint32_t saves;         /* relay records written                        */
+    uint32_t save_errors;   /* relay record writes that failed              */
+    uint32_t store_result;  /* boot: 0 no EEPROM, 1 no record, 2 restored   */
+    uint32_t restored_state;/* boot: positions read from the record        */
+    uint32_t restored_known;
     uint32_t state_mask;    /* bit n = relay n ON, as far as we know        */
     uint32_t known_mask;    /* bit n = relay n's position is established    */
 } relay_task_dbg_t;
