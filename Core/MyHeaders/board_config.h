@@ -219,9 +219,10 @@ _Static_assert(RMS_WINDOW_SAMPLES % ADC_TRIGGERS_PER_HALF == 0U, "RMS window mus
  */
 #define SENSE_NOISE_FLOOR_A     0.05f
 
-/* Rail divider ratios - TO VERIFY from the divider resistor values. */
+/* Rail divider ratios (top + bottom) / bottom:
+   24 V: 100k over 10k -> 11.0.   5 V: 270k over 56k -> 5.8214. */
 #define RAIL_24V_DIVIDER        11.0f
-#define RAIL_5V_DIVIDER         2.0f
+#define RAIL_5V_DIVIDER         5.8214f
 
 /* ======================================================================
  * Relays
