@@ -29,6 +29,13 @@
 #define F1OTA_ERR_CRC       5u      /* staging does not match the header's CRC */
 #define F1OTA_ERR_BOARD     6u      /* the image is for the other board type   */
 
+/* Request ops, as both transports carry them (LINK_OTA_*, RS485_OTA_*). */
+#define F1OTA_OP_QUERY      0u      /* report only                              */
+#define F1OTA_OP_BEGIN      1u      /* offset = size; data = u32 crc32, u32 fw_version, u8 board */
+#define F1OTA_OP_DATA       2u
+#define F1OTA_OP_END        3u
+#define F1OTA_OP_ABORT      4u
+
 #define F1OTA_ST_IDLE       0u
 #define F1OTA_ST_RECEIVING  1u
 #define F1OTA_ST_DONE       2u      /* staged; resetting into the bootloader   */
@@ -46,12 +53,18 @@ uint8_t  f1_ota_write(uint32_t offset, const uint8_t *data, uint32_t len);
 uint8_t  f1_ota_end(void);
 void     f1_ota_abort(void);
 
+/* One request from the H7, decoded by the transport. Returns F1OTA_*.
+   *reboot becomes true after a successful END: send the reply, then call
+   f1_ota_reboot(). */
+uint8_t  f1_ota_request(uint8_t op, uint32_t offset, const uint8_t *data, uint32_t len, bool *reboot);
+
 uint32_t f1_ota_next(void);         /* next image byte wanted                  */
 uint8_t  f1_ota_state(void);        /* F1OTA_ST_*                              */
 
 /* After f1_ota_end() returned OK and the reply is on its way: waits (up to
    2 s) for relay pulses to finish and the relay record to be saved, then
-   resets into the bootloader. Does not return. */
-void     f1_ota_reboot(void);
+   resets into the bootloader. Bumps *heartbeat while it waits, so the
+   supervisor keeps feeding the external watchdog. Does not return. */
+void     f1_ota_reboot(volatile uint32_t *heartbeat);
 
 #endif /* F1_OTA_H */

@@ -15,6 +15,19 @@
  * The H7 holds CS high for >= 50 us between transactions, which is the window
  * LinkTask has to re-arm in.
  *
+ * What the next frame carries (build_tx_frame), in this order:
+ *   1. OTA_STATUS, right after an OTA request: the result of that request.
+ *   2. METER_DATA when there is a window the H7 has not been sent yet, or
+ *      relay events waiting. The H7 polls every 20 ms and a window lasts
+ *      50 ms, so every window goes out at least once.
+ *   3. HARMONICS: the next part of the newest harmonics set, in the polls
+ *      that would otherwise repeat a window.
+ *   4. METER_DATA again.
+ *
+ * The H7 passes the line frequency in every POLL and COMMAND; it goes to the
+ * harmonic detectors. After the reply to a successful OTA END has been
+ * clocked out, the board resets into the bootloader, which installs it.
+ *
  * Usage (freertos.c, StartLinkTask):
  *
  *      F10Slave_CsExtiInit();
@@ -34,6 +47,8 @@
 #include "cmsis_os2.h"
 #include "F10Slave.h"
 #include "f103_tasks.h"     /* g_hb_link */
+#include "harmonics.h"
+#include "f1_ota.h"
 
 /* LinkTask wakes at least this often even when the H7 is silent, so a failed
    DMA arm is retried and SupervisorTask can see that LinkTask is alive. */
@@ -58,6 +73,22 @@ volatile uint32_t g_hb_link;               /* SupervisorTask watches this */
 
 // counters for relay commands received and relay status transferred
 static volatile uint8_t relay_cmds_rx = 0;
+
+static uint32_t          s_last_sent_window;   /* window_id of the last METER_DATA built */
+static bool              s_ota_reply;          /* next frame is OTA_STATUS                */
+static link_ota_status_t s_ota_status;
+static bool              s_reboot;             /* OTA END accepted                        */
+static uint8_t           s_reboot_stage;       /* 1 reply armed, 2 reply clocked out      */
+static uint32_t          s_reboot_armed_ms;
+
+static harm_set_t        s_harm;               /* the set being sent, copied once         */
+static uint8_t           s_harm_id;            /* its set_id                              */
+static uint8_t           s_harm_part = LINK_HARM_PARTS;   /* next part; PARTS = all sent  */
+
+_Static_assert(LINK_OTA_QUERY == F1OTA_OP_QUERY && LINK_OTA_BEGIN == F1OTA_OP_BEGIN &&
+               LINK_OTA_DATA == F1OTA_OP_DATA && LINK_OTA_END == F1OTA_OP_END &&
+               LINK_OTA_ABORT == F1OTA_OP_ABORT, "OTA op numbers must match f1_ota.h");
+_Static_assert(HARM_RATIOS == LINK_HARM_RATIOS, "harmonics record layout");
 
 
 /* Diagnostics -- deliberately non-static so Live Expressions can reach them. */
@@ -87,22 +118,13 @@ void link_post_event(const link_event_t *evt) {
 }
 
 
-static void build_tx_frame(uint8_t idx)
+static void build_meter(F10Comm_Frame_t *f)
 {
-    F10Comm_Frame_t *f = &s_tx_frame[idx];
-
-    /* Note sizeof(*f), not sizeof(s_tx_frame): the latter is the whole
-     * two-element array and would run off the end when idx == 1. */
-    memset(f, 0, sizeof(*f));
-
-    f->magic    = F10COMM_MAGIC;
-    f->version  = F10COMM_PROTO_VERSION;
-    f->type     = (uint8_t)F10_TYPE_METER_DATA;
-    f->seq      = s_tx_seq++;
-    f->reserved = 0u;
+    f->type = (uint8_t)F10_TYPE_METER_DATA;
 
     /* Running state (int32_t mA) -> this frame's wire view (int16_t mA). */
     const app_snapshot_t *s = &g_snap[g_snap_active];
+    s_last_sent_window = s->window_id;
 
     link_status_t st;
     memset(&st, 0, sizeof(st));
@@ -140,6 +162,69 @@ static void build_tx_frame(uint8_t idx)
     }
 
     link_encode_status(f->payload, &st);
+}
+
+/* A harmonics part is due: a newer set exists, or parts of this one are left. */
+static bool harm_part_due(void)
+{
+    const uint8_t id = harm_latest_id();
+    if (id != 0u && id != s_harm_id) {
+        if (harm_get(&s_harm)) {
+            s_harm_id   = s_harm.set_id;
+            s_harm_part = 0u;
+        }
+    }
+    return s_harm_part < LINK_HARM_PARTS;
+}
+
+static void build_harm(F10Comm_Frame_t *f)
+{
+    link_harm_part_t hp;
+    hp.set_id      = s_harm.set_id;
+    hp.part        = s_harm_part;
+    hp.f0_centi_hz = s_harm.f0_centi_hz;
+    for (uint8_t i = 0u; i < LINK_HARM_RELAYS_PER_PART; i++) {
+        const harm_rec_t *h = &s_harm.rec[s_harm_part * LINK_HARM_RELAYS_PER_PART + i];
+        hp.rec[i].h1_ma = h->h1_ma;
+        for (uint8_t k = 0u; k < LINK_HARM_RATIOS; k++) {
+            hp.rec[i].ratio[k] = h->ratio[k];
+            hp.rec[i].phase[k] = h->phase[k];
+        }
+    }
+    s_harm_part++;
+    f->type = (uint8_t)F10_TYPE_HARMONICS;
+    link_encode_harm_part(f->payload, &hp);
+}
+
+static void build_tx_frame(uint8_t idx)
+{
+    F10Comm_Frame_t *f = &s_tx_frame[idx];
+
+    /* Note sizeof(*f), not sizeof(s_tx_frame): the latter is the whole
+     * two-element array and would run off the end when idx == 1. */
+    memset(f, 0, sizeof(*f));
+
+    f->magic    = F10COMM_MAGIC;
+    f->version  = F10COMM_PROTO_VERSION;
+    f->seq      = s_tx_seq++;
+    f->reserved = 0u;
+
+    const bool new_window = (g_snap[g_snap_active].window_id != s_last_sent_window);
+    const bool events     = (osMessageQueueGetCount(event_qHandle) > 0u);
+
+    if (s_ota_reply) {
+        s_ota_reply = false;
+        f->type = (uint8_t)F10_TYPE_OTA_STATUS;
+        link_encode_ota_status(f->payload, &s_ota_status);
+        if (s_reboot && s_reboot_stage == 0u) {
+            s_reboot_stage    = 1u;         /* the END reply is armed */
+            s_reboot_armed_ms = HAL_GetTick();
+        }
+    } else if (new_window || events || !harm_part_due()) {
+        build_meter(f);
+    } else {
+        build_harm(f);
+    }
 
     /* CRC spans everything ahead of the crc16 field itself. */
     f->crc16 = F10Comm_Crc16((const uint8_t *)f, F10COMM_CRC_SPAN);
@@ -214,6 +299,8 @@ static void process_rx_frame(void)
                 break;
             }
 
+            harm_set_f0(link_get_f0(f->payload, LINK_F0_OFF_COMMAND));
+
             relay_cmd_t cmd = {
                 .relay_idx = wire.relay_idx,
                 .target    = wire.target,
@@ -239,7 +326,24 @@ static void process_rx_frame(void)
 
         case F10_TYPE_POLL:
             /* Master just wanted our data; the reply is already armed. */
+            harm_set_f0(link_get_f0(f->payload, LINK_F0_OFF_POLL));
             break;
+
+        case F10_TYPE_OTA: {
+            link_ota_req_t r;
+            uint8_t res = F1OTA_ERR_PARAM;
+            if (link_decode_ota_req(f->payload, &r) == 0) {
+                res = f1_ota_request(r.op, r.offset, r.data, r.len, &s_reboot);
+            }
+            s_ota_status.op_seq      = r.op_seq;
+            s_ota_status.result      = res;
+            s_ota_status.state       = f1_ota_state();
+            s_ota_status.board_type  = (uint8_t)F1_THIS_BOARD;
+            s_ota_status.next_offset = f1_ota_next();
+            s_ota_status.fw_version  = (uint16_t)((FW_VERSION_MAJOR << 8) | FW_VERSION_MINOR);
+            s_ota_reply = true;             /* goes out in the very next frame */
+            break;
+        }
 
         default:
             break;
@@ -312,6 +416,11 @@ void F10Slave_Service(void) {
 	const uint32_t flags = osThreadFlagsWait(LINK_FLAG_FRAME_RX | LINK_FLAG_SPI_ERROR, osFlagsWaitAny, F10SLAVE_IDLE_MS);
 	g_hb_link++;
 
+	/* The H7 never clocked the END reply out: install anyway. */
+	if (s_reboot_stage == 1u && (uint32_t)(HAL_GetTick() - s_reboot_armed_ms) > 2000u) {
+		f1_ota_reboot(&g_hb_link);
+	}
+
 	if ((flags & osFlagsError) != 0u) {
         /* Timeout (the H7 is idle) or a flags error. The error codes have
          * their high bits set, so they must never be tested as flags.
@@ -336,6 +445,11 @@ void F10Slave_Service(void) {
     }
 
 	if (flags & LINK_FLAG_FRAME_RX) {
+		/* The frame just clocked out was the reply to OTA END: install. */
+		if (s_reboot_stage == 1u) {
+			s_reboot_stage = 2u;
+			f1_ota_reboot(&g_hb_link);
+		}
 		process_rx_frame();
 		(void)arm_next_transfer();
 	}

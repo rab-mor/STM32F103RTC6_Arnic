@@ -137,12 +137,52 @@ void f1_ota_abort(void)
     }
 }
 
+static uint32_t le32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+uint8_t f1_ota_request(uint8_t op, uint32_t offset, const uint8_t *data, uint32_t len, bool *reboot)
+{
+    switch (op) {
+        case F1OTA_OP_QUERY:
+            return F1OTA_OK;
+        case F1OTA_OP_BEGIN: {
+            if (len < 9u) {
+                return fail(F1OTA_ERR_PARAM);
+            }
+            const f1_ota_begin_t b = {
+                .size       = offset,
+                .crc32      = le32(&data[0]),
+                .fw_version = le32(&data[4]),
+                .board_type = data[8],
+            };
+            return f1_ota_begin(&b);
+        }
+        case F1OTA_OP_DATA:
+            return f1_ota_write(offset, data, len);
+        case F1OTA_OP_END: {
+            const uint8_t res = f1_ota_end();
+            if (res == F1OTA_OK) {
+                *reboot = true;
+            }
+            return res;
+        }
+        case F1OTA_OP_ABORT:
+            f1_ota_abort();
+            return F1OTA_OK;
+        default:
+            return fail(F1OTA_ERR_PARAM);
+    }
+}
+
 uint32_t f1_ota_next(void)  { return s_ota.next; }
 uint8_t  f1_ota_state(void) { return s_ota.state; }
 
-void f1_ota_reboot(void)
+void f1_ota_reboot(volatile uint32_t *heartbeat)
 {
     for (uint32_t t = 0u; t < 2000u; t += 10u) {
+        (*heartbeat)++;
         const bool settled = (relays_busy() == 0u) &&
                              ((g_relay_truth.store_flags & STORE_F_PENDING) == 0u);
         if (settled) {

@@ -56,6 +56,7 @@
 #include "relays.h"
 #include "cmsis_os2.h"
 #include "app_shared.h"
+#include "harmonics.h"
 #include <math.h>
 #include <string.h>
 
@@ -111,6 +112,9 @@ static volatile uint32_t s_overruns;
 
 static ADC_HandleTypeDef *s_hadc1;
 
+/* Relay n's sense pin (board_config.h). */
+static const uint8_t k_relay_pin[RELAY_COUNT] = RELAY_CURRENT_SENSE_MAP;
+
 /* ======================================================================
  * Accumulation
  * ==================================================================== */
@@ -151,6 +155,21 @@ static void accumulate(const uint32_t *words, uint32_t triggers)
             uint32_t w = scan[r];
             acc_add(&s_acc[SENSE_PA4 + r],  w         & 0x0FFFU);  /* ADC1 */
             acc_add(&s_acc[SENSE_PA0 + r], (w >> 16)  & 0x0FFFU);  /* ADC2 */
+        }
+
+        /* One capture a second: the same samples, by relay, to the
+           harmonic detectors. */
+        if (harm_capturing()) {
+            uint16_t pin[SENSE_COUNT];
+            uint16_t x[RELAY_COUNT];
+            for (uint32_t r = 0U; r < 4U; r++) {
+                pin[SENSE_PA4 + r] = (uint16_t)( scan[r]        & 0x0FFFU);
+                pin[SENSE_PA0 + r] = (uint16_t)((scan[r] >> 16) & 0x0FFFU);
+            }
+            for (uint32_t rly = 0U; rly < RELAY_COUNT; rly++) {
+                x[rly] = pin[k_relay_pin[rly]];
+            }
+            harm_feed(x);
         }
 
         uint32_t rail = scan[ADC_RAIL_RANK];
@@ -211,13 +230,11 @@ static void cal_update(void)
 
 static void finalize(void)
 {
-    static const uint8_t k_map[RELAY_COUNT] = RELAY_CURRENT_SENSE_MAP;
-
     const int64_t n  = (int64_t)s_window_samples;
     const float   fn = (float)s_window_samples;
 
     for (uint8_t rly = 0U; rly < RELAY_COUNT; rly++) {
-        const sense_acc_t *a = &s_acc[k_map[rly]];
+        const sense_acc_t *a = &s_acc[k_relay_pin[rly]];
 
         /*
          * rms_counts = sqrt(var) where n^2 * var = n*sumsq - sum^2.

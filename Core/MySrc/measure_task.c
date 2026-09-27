@@ -26,6 +26,7 @@
 #include "app_shared.h"
 #include "relays.h"
 #include "current_sense.h"
+#include "harmonics.h"
 #include "f103_tasks.h"
 
 extern ADC_HandleTypeDef hadc1;
@@ -88,6 +89,7 @@ void MeasureTask_Run(void *argument)
     (void)argument;
 
     sense_init();
+    harm_init();
     g_measure_dbg.start_rc = (int32_t)sense_start(&hadc1, &hadc2, &htim3);
 
     if (g_measure_dbg.start_rc != 0) {
@@ -111,6 +113,7 @@ void MeasureTask_Run(void *argument)
         g_hb_measure++;
 
         const uint32_t now = HAL_GetTick();
+        harm_service(now);              /* starts / finishes a harmonics capture */
 
         if (sense_service() != 0u) {
             last_window = now;
